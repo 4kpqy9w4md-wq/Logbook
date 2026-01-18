@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="apple-mobile-web-app-capable" content="yes">
+    <title>Flight Logbook</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+</head>
+
+<body class="bg-slate-100">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef } = React;
+
+/* ---------- Time Utilities ---------- */
+const minutesBetween = (start, end) => {
+  if (!start || !end) return 0;
+  const s = new Date(`2000-01-01T${start}Z`);
+  let e = new Date(`2000-01-01T${end}Z`);
+  if (e < s) e.setUTCDate(e.getUTCDate() + 1);
+  return Math.round((e - s) / 60000);
+};
+
+const estimateNightMinutes = (off, on) => {
+  if (!off || !on) return 0;
+  let mins = 0;
+  let t = new Date(`2000-01-01T${off}Z`);
+  let end = new Date(`2000-01-01T${on}Z`);
+  if (end < t) end.setUTCDate(end.getUTCDate() + 1);
+
+  while (t < end) {
+    const hour = t.getUTCHours();
+    if (hour >= 18 || hour < 6) mins++;
+    t.setUTCMinutes(t.getUTCMinutes() + 1);
+  }
+  return mins;
+};
+    
+const normalizeZuluTime = (value) => {
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length === 4) {
+    const hh = digits.slice(0, 2);
+    const mm = digits.slice(2, 4);
+    if (+hh < 24 && +mm < 60) {
+      return `${hh}:${mm}`;
+    }
+  }
+
+  // If it’s not valid, wipe it
+  return "";
+};
+
+const isValidZuluTime = (value) => {
+  if (!value) return false;
+  const match = value.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return false;
+
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+
+  return hh >= 0 && hh < 24 && mm >= 0 && mm < 60;
+};
+
+/* ---------- App ---------- */
+function FlightLogbook() {
+  const [flights, setFlights] = useState([]);
+  const [current, setCurrent] = useState(defaultFlight());
+  const [editingId, setEditingId] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function defaultFlight() {
+    return {
+      id: null,
+      date: new Date().toISOString().split("T")[0],
+      flightNumber: "",
+      departure: "",
+      arrival: "",
+      outTime: "",
+      offTime: "",
+      onTime: "",
+      inTime: "",
+      crewRole: "SIC",
+      flyingRole: "PM"
+    };
+  }
+  
+  const outValid = isValidZuluTime(current.outTime);
+  const offValid = isValidZuluTime(current.offTime);
+  const onValid = isValidZuluTime(current.onTime);
+  const inValid = isValidZuluTime(current.inTime);
+
+  const totals = flights.reduce((acc, f) => {
+    const block = minutesBetween(f.outTime, f.inTime);
+    const night = estimateNightMinutes(f.offTime, f.onTime);
+    acc.total += block;
+    acc.night += night;
+    return acc;
+  }, { total: 0, night: 0 });
+
+  const saveFlight = () => {
+      const requiredTimes = ["outTime", "offTime", "onTime", "inTime"];
+
+      for (const field of requiredTimes) {
+        if (!isValidZuluTime(current[field])) {
+          alert(`Invalid ${field.toUpperCase().replace("TIME","")} time`);
+          return;
+        }
+      }
+
+    const entry = { ...current, id: editingId ?? Date.now() };
+    setFlights(editingId
+      ? flights.map(f => f.id === editingId ? entry : f)
+      : [...flights, entry]
+    );
+    setCurrent(defaultFlight());
+    setEditingId(null);
+  };
+
+  const editFlight = f => {
+    setCurrent(f);
+    setEditingId(f.id);
+  };
+
+  const deleteFlight = id => {
+    if (confirm("Delete this flight?")) {
+      setFlights(flights.filter(f => f.id !== id));
+    }
+  };
+
+  const saveJSON = () => {
+    const blob = new Blob([JSON.stringify(flights, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `flight-logbook.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const loadJSON = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => setFlights(JSON.parse(r.result));
+    r.readAsText(file);
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto p-4">
+      <h1 className="text-3xl font-bold mb-4">✈️ Flight Logbook</h1>
+
+      {/* Totals */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500">Total Time</div>
+          <div className="text-2xl font-bold">{(totals.total/60).toFixed(1)} h</div>
+        </div>
+        <div className="bg-white p-4 rounded shadow">
+          <div className="text-gray-500">Night Time</div>
+          <div className="text-2xl font-bold">{(totals.night/60).toFixed(1)} h</div>
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="flex gap-2 mb-4">
+        <button onClick={saveJSON} className="px-4 py-2 bg-blue-600 text-white rounded">Save JSON</button>
+        <button onClick={() => fileInputRef.current.click()} className="px-4 py-2 bg-green-600 text-white rounded">Load JSON</button>
+        <input type="file" ref={fileInputRef} onChange={loadJSON} className="hidden" />
+      </div>
+
+      {/* Form */}
+      <div className="bg-white p-4 rounded shadow mb-6 grid grid-cols-2 gap-4">
+        <input type="date" value={current.date} onChange={e=>setCurrent({...current,date:e.target.value})}/>
+        <input placeholder="Flight #" value={current.flightNumber} onChange={e=>setCurrent({...current,flightNumber:e.target.value})}/>
+        <input placeholder="DEP" value={current.departure} onChange={e=>setCurrent({...current,departure:e.target.value})}/>
+        <input placeholder="ARR" value={current.arrival} onChange={e=>setCurrent({...current,arrival:e.target.value})}/>
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">OUT (Z)</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="HHMM"
+            value={current.outTime}
+            onChange={e =>
+              setCurrent({ ...current, outTime: e.target.value })
+            }
+            onBlur={e =>
+              setCurrent({ ...current, outTime: normalizeZuluTime(e.target.value) })
+            }
+            className={`w-full border rounded px-2 py-1
+              ${current.outTime && !outValid ? "border-red-500 bg-red-50" : ""}
+            `}
+          />
+
+        </div>
+
+
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">OFF (Z)</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="HHMM"
+            value={current.offTime}
+            onChange={e =>
+                setCurrent({ ...current, offTime: e.target.value })
+            }
+            onBlur={e =>
+                setCurrent({ ...current, offTime: normalizeZuluTime(e.target.value) })
+            }
+            className={`w-full border rounded px-2 py-1
+                ${current.offTime && !offValid ? "border-red-500 bg-red-50" : ""}
+            `}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">ON (Z)</label>
+            <input
+                type="text"
+                inputMode="numeric"
+                placeholder="HHMM"
+                value={current.onTime}
+                onChange={e =>
+                  setCurrent({ ...current, onTime: e.target.value })
+                }
+                onBlur={e =>
+                  setCurrent({ ...current, onTime: normalizeZuluTime(e.target.value) })
+                }
+                className={`w-full border rounded px-2 py-1
+                  ${current.onTime && !onValid ? "border-red-500 bg-red-50" : ""}
+                `}
+              />
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">IN (Z)</label>
+        <input
+        type="text"
+        inputMode="numeric"
+        placeholder="HHMM"
+        value={current.inTime}
+        onChange={e =>
+        setCurrent({ ...current, inTime: e.target.value })
+        }
+        onBlur={e =>
+        setCurrent({ ...current, inTime: normalizeZuluTime(e.target.value) })
+        }
+        className={`w-full border rounded px-2 py-1
+        ${current.inTime && !inValid ? "border-red-500 bg-red-50" : ""}
+        `}
+        />
+        </div>
+
+        <button onClick={saveFlight} className="col-span-2 bg-indigo-600 text-white py-2 rounded">
+          {editingId ? "Update Flight" : "Add Flight"}
+        </button>
+      </div>
+
+      {/* Table */}
+      <table className="w-full bg-white rounded shadow">
+        <thead className="bg-slate-200">
+          <tr>
+            <th>Date</th><th>#</th><th>Route</th><th>OUT–IN</th><th>Total</th><th>Night</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {flights.map(f => (
+            <tr key={f.id} className="border-t text-center">
+              <td>{f.date}</td>
+              <td>{f.flightNumber}</td>
+              <td>{f.departure}-{f.arrival}</td>
+              <td>{f.outTime}-{f.inTime}</td>
+              <td>{(minutesBetween(f.outTime,f.inTime)/60).toFixed(1)}</td>
+              <td>{(estimateNightMinutes(f.offTime,f.onTime)/60).toFixed(1)}</td>
+              <td>
+                <button onClick={()=>editFlight(f)} className="text-blue-600">Edit</button>{" "}
+                <button onClick={()=>deleteFlight(f.id)} className="text-red-600">✕</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+ReactDOM.render(<FlightLogbook />, document.getElementById("root"));
+</script>
+</body>
+</html>
