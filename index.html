@@ -198,11 +198,27 @@ function FlightLogbook() {
 
       {/* ================= Controls ================= */}
       <div className="flex flex-wrap gap-2 mb-6">
-        <button onClick={saveJSON} className="btn-blue">Save JSON</button>
-        <button onClick={() => jsonInputRef.current.click()} className="btn-green">Load JSON</button>
-        <button onClick={() => fmsCaptureRef.current.click()} className="btn-emerald">
-          📷 Scan FMS (Phase I)
-        </button>
+     <button
+       onClick={saveJSON}
+       className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+     >
+       Save JSON
+     </button>
+
+     <button
+       onClick={() => jsonInputRef.current.click()}
+       className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
+     >
+       Load JSON
+     </button>
+
+     <button
+       onClick={() => fmsCaptureRef.current.click()}
+       className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium"
+     >
+       📷 Scan FMS (Phase I)
+     </button>
+
 
         <input ref={jsonInputRef} type="file" onChange={loadJSON} className="hidden" />
         <input
@@ -315,19 +331,6 @@ const FlightTable = ({ flights, onEdit, onDelete }) => (
 );
 
 /* ============================================================
-   Utility Styles
-   ============================================================ */
-
-const btn = "px-4 py-2 text-white rounded font-medium";
-const style = document.createElement("style");
-style.innerHTML = `
-  .btn-blue { background:#2563eb; ${btn} }
-  .btn-green { background:#16a34a; ${btn} }
-  .btn-emerald { background:#059669; ${btn} }
-`;
-document.head.appendChild(style);
-
-/* ============================================================
    Render App
    ============================================================ */
 
@@ -335,4 +338,3 @@ ReactDOM.render(<FlightLogbook />, document.getElementById("root"));
 </script>
 </body>
 </html>
-
