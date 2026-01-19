@@ -1,1 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- ===================== -->
+  <!-- Meta / App Settings -->
+  <!-- ===================== -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Flight Logbook</title>
+
+  <!-- ===================== -->
+  <!-- Libraries -->
+  <!-- ===================== -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef } = React;
+
+/* ============================================================
+   Time Utilities
+   ============================================================ */
+
+const minutesBetween = (start, end) => {
+  if (!start || !end) return 0;
+  const s = new Date(`2000-01-01T${start}Z`);
+  let e = new Date(`2000-01-01T${end}Z`);
+  if (e < s) e.setUTCDate(e.getUTCDate() + 1);
+  return Math.round((e - s) / 60000);
+};
+
+const estimateNightMinutes = (off, on) => {
+  if (!off || !on) return 0;
+  let mins = 0;
+  let t = new Date(`2000-01-01T${off}Z`);
+  let end = new Date(`2000-01-01T${on}Z`);
+  if (end < t) end.setUTCDate(end.getUTCDate() + 1);
+
+  while (t < end) {
+    const h = t.getUTCHours();
+    if (h >= 18 || h < 6) mins++;
+    t.setUTCMinutes(t.getUTCMinutes() + 1);
+  }
+  return mins;
+};
+
+const normalizeZuluTime = value => {
+  const d = value.replace(/\D/g, "");
+  if (d.length === 4) {
+    const hh = +d.slice(0,2);
+    const mm = +d.slice(2,4);
+    if (hh < 24 && mm < 60) return `${d.slice(0,2)}:${d.slice(2)}`;
+  }
+  return "";
+};
+
+const isValidZuluTime = value =>
+  /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+
+/* ============================================================
+   Default Flight Factory
+   ============================================================ */
+
+const createEmptyFlight = () => ({
+  id: null,
+  date: new Date().toISOString().split("T")[0],
+  flightNumber: "",
+  departure: "",
+  arrival: "",
+  outTime: "",
+  offTime: "",
+  onTime: "",
+  inTime: "",
+  crewRole: "SIC",
+  flyingRole: "PM"
+});
+
+/* ============================================================
+   Main App Component
+   ============================================================ */
+
+function FlightLogbook() {
+
+  /* ---------- State ---------- */
+  const [flights, setFlights] = useState([]);
+  const [current, setCurrent] = useState(createEmptyFlight());
+  const [editingId, setEditingId] = useState(null);
+
+  // OCR Phase I
+  const [fmsImage, setFmsImage] = useState(null);
+
+  /* ---------- Refs ---------- */
+  const jsonInputRef = useRef(null);
+  const fmsCaptureRef = useRef(null);
+
+  /* ---------- Derived State ---------- */
+  const totals = flights.reduce((acc, f) => {
+    acc.total += minutesBetween(f.outTime, f.inTime);
+    acc.night += estimateNightMinutes(f.offTime, f.onTime);
+    return acc;
+  }, { total: 0, night: 0 });
+
+  /* ============================================================
+     Event Handlers
+     ============================================================ */
+
+  const saveFlight = () => {
+    for (const t of ["outTime","offTime","onTime","inTime"]) {
+      if (!isValidZuluTime(current[t])) {
+        alert(`Invalid ${t.replace("Time","").toUpperCase()} time`);
+        return;
+      }
+    }
+
+    const entry = { ...current, id: editingId ?? Date.now() };
+
+    setFlights(editingId
+      ? flights.map(f => f.id === editingId ? entry : f)
+      : [...flights, entry]
+    );
+
+    setCurrent(createEmptyFlight());
+    setEditingId(null);
+  };
+
+  const editFlight = f => {
+    setCurrent(f);
+    setEditingId(f.id);
+  };
+
+  const deleteFlight = id => {
+    if (confirm("Delete this flight?")) {
+      setFlights(flights.filter(f => f.id !== id));
+    }
+  };
+
+  /* ---------- JSON Import / Export ---------- */
+
+  const saveJSON = () => {
+    const blob = new Blob(
+      [JSON.stringify(flights, null, 2)],
+      { type: "application/json" }
+    );
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "flight-logbook.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const loadJSON = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => setFlights(JSON.parse(r.result));
+    r.readAsText(file);
+  };
+
+  /* ============================================================
+     OCR – Phase I (Image Capture Only)
+     ============================================================ */
+
+  const handleFmsCapture = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    await img.decode();
+
+    setFmsImage(img);
+    alert("FMS image captured. OCR processing comes next.");
+  };
+
+  /* ============================================================
+     Render
+     ============================================================ */
+
+  return (
+    <div className="max-w-6xl mx-auto p-4">
+
+      {/* ================= Header ================= */}
+      <h1 className="text-3xl font-bold mb-4">✈️ Flight Logbook</h1>
+
+      {/* ================= Totals ================= */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <SummaryCard label="Total Time" value={(totals.total/60).toFixed(1) + " h"} />
+        <SummaryCard label="Night Time" value={(totals.night/60).toFixed(1) + " h"} />
+      </div>
+
+      {/* ================= Controls ================= */}
+      <div className="flex flex-wrap gap-2 mb-6">
+        <button onClick={saveJSON} className="btn-blue">Save JSON</button>
+        <button onClick={() => jsonInputRef.current.click()} className="btn-green">Load JSON</button>
+        <button onClick={() => fmsCaptureRef.current.click()} className="btn-emerald">
+          📷 Scan FMS (Phase I)
+        </button>
+
+        <input ref={jsonInputRef} type="file" onChange={loadJSON} className="hidden" />
+        <input
+          ref={fmsCaptureRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleFmsCapture}
+          className="hidden"
+        />
+      </div>
+
+      {/* ================= Flight Form ================= */}
+      <FlightForm
+        current={current}
+        setCurrent={setCurrent}
+        onSave={saveFlight}
+        editing={!!editingId}
+      />
+
+      {/* ================= Flight Table ================= */}
+      <FlightTable
+        flights={flights}
+        onEdit={editFlight}
+        onDelete={deleteFlight}
+      />
+
+    </div>
+  );
+}
+
+/* ============================================================
+   Small UI Components
+   ============================================================ */
+
+const SummaryCard = ({ label, value }) => (
+  <div className="bg-white p-4 rounded shadow">
+    <div className="text-gray-500">{label}</div>
+    <div className="text-2xl font-bold">{value}</div>
+  </div>
+);
+
+/* ---------- Flight Form ---------- */
+
+const FlightForm = ({ current, setCurrent, onSave, editing }) => {
+
+  const timeField = (label, field) => {
+    const valid = isValidZuluTime(current[field]);
+    return (
+      <div>
+        <label className="block text-sm text-gray-600 mb-1">{label} (Z)</label>
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="HHMM"
+          value={current[field]}
+          onChange={e => setCurrent({ ...current, [field]: e.target.value })}
+          onBlur={e => setCurrent({ ...current, [field]: normalizeZuluTime(e.target.value) })}
+          className={`w-full border rounded px-2 py-1 ${
+            current[field] && !valid ? "border-red-500 bg-red-50" : ""
+          }`}
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div className="bg-white p-4 rounded shadow mb-6 grid grid-cols-2 gap-4">
+      <input type="date" value={current.date} onChange={e=>setCurrent({...current,date:e.target.value})}/>
+      <input placeholder="Flight #" value={current.flightNumber} onChange={e=>setCurrent({...current,flightNumber:e.target.value})}/>
+      <input placeholder="DEP" value={current.departure} onChange={e=>setCurrent({...current,departure:e.target.value})}/>
+      <input placeholder="ARR" value={current.arrival} onChange={e=>setCurrent({...current,arrival:e.target.value})}/>
+      {timeField("OUT", "outTime")}
+      {timeField("OFF", "offTime")}
+      {timeField("ON", "onTime")}
+      {timeField("IN", "inTime")}
+      <button onClick={onSave} className="col-span-2 bg-indigo-600 text-white py-2 rounded">
+        {editing ? "Update Flight" : "Add Flight"}
+      </button>
+    </div>
+  );
+};
+
+/* ---------- Flight Table ---------- */
+
+const FlightTable = ({ flights, onEdit, onDelete }) => (
+  <table className="w-full bg-white rounded shadow">
+    <thead className="bg-slate-200">
+      <tr>
+        <th>Date</th><th>#</th><th>Route</th><th>OUT–IN</th><th>Total</th><th>Night</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {flights.map(f => (
+        <tr key={f.id} className="border-t text-center">
+          <td>{f.date}</td>
+          <td>{f.flightNumber}</td>
+          <td>{f.departure}-{f.arrival}</td>
+          <td>{f.outTime}-{f.inTime}</td>
+          <td>{(minutesBetween(f.outTime,f.inTime)/60).toFixed(1)}</td>
+          <td>{(estimateNightMinutes(f.offTime,f.onTime)/60).toFixed(1)}</td>
+          <td>
+            <button onClick={()=>onEdit(f)} className="text-blue-600">Edit</button>{" "}
+            <button onClick={()=>onDelete(f.id)} className="text-red-600">✕</button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+);
+
+/* ============================================================
+   Utility Styles
+   ============================================================ */
+
+const btn = "px-4 py-2 text-white rounded font-medium";
+const style = document.createElement("style");
+style.innerHTML = `
+  .btn-blue { background:#2563eb; ${btn} }
+  .btn-green { background:#16a34a; ${btn} }
+  .btn-emerald { background:#059669; ${btn} }
+`;
+document.head.appendChild(style);
+
+/* ============================================================
+   Render App
+   ============================================================ */
+
+ReactDOM.render(<FlightLogbook />, document.getElementById("root"));
+</script>
+</body>
+</html>
 
